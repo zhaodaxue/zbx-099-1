@@ -41,7 +41,7 @@ export default function ControlPanel() {
   };
 
   return (
-    <div className="absolute top-0 right-0 h-full w-96 bg-slate-900/95 backdrop-blur-sm border-l border-slate-700/50 overflow-y-auto z-10">
+    <div data-control-panel className="absolute top-0 right-0 h-full w-96 bg-slate-900/95 backdrop-blur-sm border-l border-slate-700/50 overflow-y-auto z-20">
       <div className="p-5 space-y-5">
         <div className="flex items-center gap-3 border-b border-slate-700/50 pb-4">
           <div className="p-2.5 rounded-xl bg-emerald-500/20">
@@ -135,7 +135,7 @@ export default function ControlPanel() {
         </div>
 
         {currentCombination && currentTree && (
-          <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50 space-y-3">
+          <div data-eval-section className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50 space-y-3">
             <div className="text-sm font-semibold text-slate-200">当前方案评估</div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>

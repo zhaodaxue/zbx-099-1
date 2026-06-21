@@ -1,4 +1,4 @@
-import type { Vec3, Obstacle, LiftPoint, TreeData, LiftCombination, HeightPoint } from '@/types';
+import type { Vec3, Obstacle, LiftPoint, TreeData, LiftCombination, HeightPoint, PathSegment, ObstacleProjection, ProfileData, SegmentStatus } from '@/types';
 
 export function vecSub(a: Vec3, b: Vec3): Vec3 {
   return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
@@ -269,4 +269,240 @@ export function computeAllCombinations(
 
 export function getLiftPointById(tree: TreeData, id: string): LiftPoint | undefined {
   return tree.liftPoints.find(lp => lp.id === id);
+}
+
+export function horizontalDistance(a: Vec3, b: Vec3): number {
+  const dx = a.x - b.x;
+  const dz = a.z - b.z;
+  return Math.sqrt(dx * dx + dz * dz);
+}
+
+export function computePointToBoxClearance(
+  sphereCenter: Vec3,
+  sphereRadius: number,
+  boxPos: Vec3,
+  boxSize: Vec3
+): number {
+  const halfX = boxSize.x / 2;
+  const halfY = boxSize.y / 2;
+  const halfZ = boxSize.z / 2;
+
+  const closestX = Math.max(boxPos.x - halfX, Math.min(sphereCenter.x, boxPos.x + halfX));
+  const closestY = Math.max(boxPos.y - halfY, Math.min(sphereCenter.y, boxPos.y + halfY));
+  const closestZ = Math.max(boxPos.z - halfZ, Math.min(sphereCenter.z, boxPos.z + halfZ));
+
+  const dx = sphereCenter.x - closestX;
+  const dy = sphereCenter.y - closestY;
+  const dz = sphereCenter.z - closestZ;
+
+  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  return distance - sphereRadius;
+}
+
+export function progressToDistance(progress: number, totalDistance: number): number {
+  return progress * totalDistance;
+}
+
+export function distanceToProgress(distance: number, totalDistance: number): number {
+  return totalDistance > 0 ? distance / totalDistance : 0;
+}
+
+export function projectObstacleOnPath(
+  startPos: Vec3,
+  targetPos: Vec3,
+  obstacle: Obstacle,
+  totalDistance: number,
+  ballRadius: number,
+  liftHeight: number,
+  swingOffset: Vec3 = { x: 0, y: 0, z: 0 }
+): ObstacleProjection | null {
+  const pathDir = {
+    x: (targetPos.x - startPos.x),
+    y: 0,
+    z: (targetPos.z - startPos.z),
+  };
+  const pathLen = Math.sqrt(pathDir.x * pathDir.x + pathDir.z * pathDir.z);
+  if (pathLen < 0.001) return null;
+
+  const pathDirN = {
+    x: pathDir.x / pathLen,
+    y: 0,
+    z: pathDir.z / pathLen,
+  };
+
+  const halfX = obstacle.size.x / 2;
+  const halfZ = obstacle.size.z / 2;
+  const obsMinX = obstacle.position.x - halfX;
+  const obsMaxX = obstacle.position.x + halfX;
+  const obsMinZ = obstacle.position.z - halfZ;
+  const obsMaxZ = obstacle.position.z + halfZ;
+  const obsTop = obstacle.position.y + obstacle.size.y / 2;
+  const obsBottom = obstacle.position.y - obstacle.size.y / 2;
+
+  const corners = [
+    { x: obsMinX, z: obsMinZ },
+    { x: obsMinX, z: obsMaxZ },
+    { x: obsMaxX, z: obsMinZ },
+    { x: obsMaxX, z: obsMaxZ },
+  ];
+
+  let minT = Infinity;
+  let maxT = -Infinity;
+
+  for (const corner of corners) {
+    const rel = {
+      x: corner.x - startPos.x,
+      z: corner.z - startPos.z,
+    };
+    const t = rel.x * pathDirN.x + rel.z * pathDirN.z;
+    minT = Math.min(minT, t);
+    maxT = Math.max(maxT, t);
+  }
+
+  if (maxT < -ballRadius || minT > pathLen + ballRadius) {
+    return null;
+  }
+
+  const startT = Math.max(0, minT - ballRadius);
+  const endT = Math.min(pathLen, maxT + ballRadius);
+
+  if (endT <= startT) return null;
+
+  const sampleCount = 20;
+  let worstStatus: SegmentStatus = 'safe';
+
+  for (let i = 0; i <= sampleCount; i++) {
+    const t = startT + (endT - startT) * (i / sampleCount);
+    const progress = t / pathLen;
+    const ballPos = computeBallPosition(startPos, targetPos, progress, liftHeight);
+    const offsetPos = vecAdd(ballPos, swingOffset);
+
+    if (sphereIntersectsBox(offsetPos, ballRadius, obstacle.position, obstacle.size)) {
+      worstStatus = 'collision';
+      break;
+    }
+
+    const clearance = computePointToBoxClearance(offsetPos, ballRadius, obstacle.position, obstacle.size);
+    if (clearance < 0.5 && worstStatus === 'safe') {
+      worstStatus = 'warning';
+    }
+  }
+
+  return {
+    obstacleId: obstacle.id,
+    obstacleName: obstacle.name,
+    startDistance: startT,
+    endDistance: endT,
+    topHeight: obsTop,
+    bottomHeight: Math.max(0, obsBottom),
+    status: worstStatus,
+  };
+}
+
+export function computeSegmentClearanceStatus(
+  startPos: Vec3,
+  targetPos: Vec3,
+  ballRadius: number,
+  liftHeight: number,
+  obstacles: Obstacle[],
+  swingOffset: Vec3,
+  progress: number
+): { status: SegmentStatus; minClearance: number } {
+  const pos = computeBallPosition(startPos, targetPos, progress, liftHeight);
+  const offsetPos = vecAdd(pos, swingOffset);
+
+  let minClearance = Infinity;
+  let status: SegmentStatus = 'safe';
+
+  for (const obs of obstacles) {
+    if (sphereIntersectsBox(offsetPos, ballRadius, obs.position, obs.size)) {
+      return { status: 'collision', minClearance: -1 };
+    }
+    const clearance = computePointToBoxClearance(offsetPos, ballRadius, obs.position, obs.size);
+    minClearance = Math.min(minClearance, clearance);
+  }
+
+  if (minClearance < 0.5) {
+    status = 'warning';
+  }
+
+  return { status, minClearance };
+}
+
+export function computeProfileData(
+  tree: TreeData,
+  liftPointA?: Vec3,
+  liftPointB?: Vec3,
+  swingCm: number = 0,
+  segmentsCount: number = 40
+): ProfileData | null {
+  const ballRadius = tree.soilBall.diameter / 2;
+  const startPos = tree.soilBall.centerOfMass;
+  const targetPos = {
+    x: tree.targetPit.position.x,
+    y: tree.targetPit.depth + ballRadius,
+    z: tree.targetPit.position.z,
+  };
+  const totalDistance = horizontalDistance(startPos, targetPos);
+
+  if (totalDistance < 0.1) return null;
+
+  const liftHeight = computeLiftHeight(
+    startPos, targetPos, tree.obstacles, ballRadius, liftPointA, liftPointB
+  );
+
+  const swingRad = swingCm / 100;
+  const swingOffset: Vec3 = { x: swingRad, y: 0, z: swingRad };
+
+  const segments: PathSegment[] = [];
+  let maxHeight = 0;
+
+  for (let i = 0; i < segmentsCount; i++) {
+    const startProgress = i / segmentsCount;
+    const endProgress = (i + 1) / segmentsCount;
+    const midProgress = (startProgress + endProgress) / 2;
+
+    const startPosBall = computeBallPosition(startPos, targetPos, startProgress, liftHeight);
+    const endPosBall = computeBallPosition(startPos, targetPos, endProgress, liftHeight);
+
+    const { status, minClearance } = computeSegmentClearanceStatus(
+      startPos, targetPos, ballRadius, liftHeight, tree.obstacles, swingOffset, midProgress
+    );
+
+    const startHeight = startPosBall.y;
+    const endHeight = endPosBall.y;
+    maxHeight = Math.max(maxHeight, startHeight, endHeight);
+
+    segments.push({
+      segmentIndex: i,
+      startProgress,
+      endProgress,
+      startHeight,
+      endHeight,
+      startDistance: progressToDistance(startProgress, totalDistance),
+      endDistance: progressToDistance(endProgress, totalDistance),
+      status,
+      minClearance,
+    });
+  }
+
+  const obstacleProjections: ObstacleProjection[] = [];
+  for (const obs of tree.obstacles) {
+    const proj = projectObstacleOnPath(
+      startPos, targetPos, obs, totalDistance, ballRadius, liftHeight, swingOffset
+    );
+    if (proj) {
+      obstacleProjections.push(proj);
+    }
+  }
+
+  return {
+    totalDistance,
+    maxHeight: Math.max(maxHeight + 1, 5),
+    segments,
+    obstacleProjections,
+    startPos,
+    targetPos,
+    ballRadius,
+  };
 }

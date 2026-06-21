@@ -8,8 +8,16 @@ import {
   computeCableTonnage,
   checkPathCollision,
   vecAdd,
+  sphereIntersectsBox,
+  computePointToBoxClearance,
 } from '@/utils/liftingMath';
-import type { Vec3, TreeData } from '@/types';
+import type { Vec3, TreeData, PathSegment, SegmentStatus } from '@/types';
+
+const SEGMENT_STATUS_COLOR: Record<SegmentStatus, number> = {
+  safe: 0x22c55e,
+  warning: 0xf59e0b,
+  collision: 0xef4444,
+};
 
 export default function Scene3D() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -26,11 +34,25 @@ export default function Scene3D() {
     targetPit?: THREE.Mesh;
     targetPitRing?: THREE.Mesh;
     pathLine?: THREE.Line;
+    pathSegments: THREE.Line[];
+    pathSegmentHighlights: THREE.Mesh[];
     cables: THREE.Line[];
     pathHasCollision: boolean;
     currentLiftHeight: number;
-  }>({ obstacles: [], liftPoints: [], cables: [], pathHasCollision: false, currentLiftHeight: 3 });
+    pathSegmentData: PathSegment[];
+  }>({
+    obstacles: [],
+    liftPoints: [],
+    cables: [],
+    pathHasCollision: false,
+    currentLiftHeight: 3,
+    pathSegments: [],
+    pathSegmentHighlights: [],
+    pathSegmentData: [],
+  });
   const rafRef = useRef<number>(0);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const mouseVecRef = useRef(new THREE.Vector2());
 
   const selectedLiftPoints = useAppStore(s => s.selectedLiftPoints);
   const swingCm = useAppStore(s => s.swingCm);
@@ -40,6 +62,9 @@ export default function Scene3D() {
   const setIsAnimating = useAppStore(s => s.setIsAnimating);
   const setCanvasRef = useAppStore(s => s.setCanvasRef);
   const currentTreeId = useAppStore(s => s.currentTreeId);
+  const selectedSegmentIndex = useAppStore(s => s.selectedSegmentIndex);
+  const setSelectedSegmentIndex = useAppStore(s => s.setSelectedSegmentIndex);
+  const profileData = useAppStore(s => s.profileData);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -179,10 +204,55 @@ export default function Scene3D() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animationProgress, selectedLiftPoints, currentTreeId, swingCm]);
 
+  useEffect(() => {
+    updateSegmentHighlight();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSegmentIndex, currentTreeId, profileData]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleClick = (e: MouseEvent) => {
+      if (!cameraRef.current || !sceneRef.current) return;
+      const rect = container.getBoundingClientRect();
+      mouseVecRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseVecRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycasterRef.current.setFromCamera(mouseVecRef.current, cameraRef.current);
+      const intersects = raycasterRef.current.intersectObjects(
+        objectsRef.current.pathSegmentHighlights,
+        false
+      );
+
+      if (intersects.length > 0) {
+        const hit = intersects[0].object;
+        const idx = (hit.userData as { segmentIndex: number }).segmentIndex;
+        if (typeof idx === 'number') {
+          const prev = useAppStore.getState().selectedSegmentIndex;
+          setSelectedSegmentIndex(prev === idx ? null : idx);
+          const panel = document.querySelector('[data-control-panel]');
+          if (panel) {
+            const evalSection = panel.querySelector('[data-eval-section]');
+            if (evalSection) {
+              evalSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }
+        }
+      }
+    };
+
+    container.addEventListener('click', handleClick);
+    return () => container.removeEventListener('click', handleClick);
+  }, [setSelectedSegmentIndex]);
+
   function clearDynamicObjects() {
     const scene = sceneRef.current;
     if (!scene) return;
-    const { soilBall, treeTrunk, obstacles, liftPoints, targetPit, targetPitRing, pathLine, cables } = objectsRef.current;
+    const {
+      soilBall, treeTrunk, obstacles, liftPoints, targetPit, targetPitRing,
+      pathLine, cables, pathSegments, pathSegmentHighlights
+    } = objectsRef.current;
     [soilBall, treeTrunk, targetPit, targetPitRing, pathLine].forEach(obj => {
       if (obj) {
         scene.remove(obj);
@@ -192,7 +262,18 @@ export default function Scene3D() {
     obstacles.forEach(o => { scene.remove(o); disposeObject(o); });
     liftPoints.forEach(l => { scene.remove(l); disposeObject(l); });
     cables.forEach(c => { scene.remove(c); disposeObject(c); });
-    objectsRef.current = { obstacles: [], liftPoints: [], cables: [], pathHasCollision: false, currentLiftHeight: 3 };
+    pathSegments.forEach(s => { scene.remove(s); disposeObject(s); });
+    pathSegmentHighlights.forEach(h => { scene.remove(h); disposeObject(h); });
+    objectsRef.current = {
+      obstacles: [],
+      liftPoints: [],
+      cables: [],
+      pathHasCollision: false,
+      currentLiftHeight: 3,
+      pathSegments: [],
+      pathSegmentHighlights: [],
+      pathSegmentData: [],
+    };
   }
 
   function disposeObject(obj: THREE.Object3D) {
@@ -359,10 +440,15 @@ export default function Scene3D() {
     const scene = sceneRef.current;
     if (!tree || !scene) return;
 
-    const { cables, pathLine } = objectsRef.current;
+    const { cables, pathLine, pathSegments, pathSegmentHighlights } = objectsRef.current;
     cables.forEach(c => { scene.remove(c); disposeObject(c); });
     if (pathLine) { scene.remove(pathLine); disposeObject(pathLine); }
+    pathSegments.forEach(s => { scene.remove(s); disposeObject(s); });
+    pathSegmentHighlights.forEach(h => { scene.remove(h); disposeObject(h); });
     objectsRef.current.cables = [];
+    objectsRef.current.pathSegments = [];
+    objectsRef.current.pathSegmentHighlights = [];
+    objectsRef.current.pathSegmentData = [];
 
     objectsRef.current.liftPoints.forEach((group, idx) => {
       const lp = tree.liftPoints[idx];
@@ -412,7 +498,83 @@ export default function Scene3D() {
       );
       objectsRef.current.pathHasCollision = hasCollision;
 
-      const pathColor = hasCollision ? 0xef4444 : 0x22c55e;
+      const segmentsCount = 40;
+      const segData: PathSegment[] = [];
+      for (let i = 0; i < segmentsCount; i++) {
+        const startProgress = i / segmentsCount;
+        const endProgress = (i + 1) / segmentsCount;
+        const midProgress = (startProgress + endProgress) / 2;
+
+        const startPosBall = computeBallPosition(startPos, targetPos, startProgress, liftHeight);
+        const endPosBall = computeBallPosition(startPos, targetPos, endProgress, liftHeight);
+
+        let status: SegmentStatus = 'safe';
+        let minClearance = Infinity;
+
+        for (const obs of tree.obstacles) {
+          const midBall = computeBallPosition(startPos, targetPos, midProgress, liftHeight);
+          const midOffset = vecAdd(midBall, swingOffset);
+          if (sphereIntersectsBox(midOffset, ballRadius, obs.position, obs.size)) {
+            status = 'collision';
+            minClearance = -1;
+            break;
+          }
+          const cl = computePointToBoxClearance(midOffset, ballRadius, obs.position, obs.size);
+          minClearance = Math.min(minClearance, cl);
+        }
+        if (status === 'safe' && minClearance < 0.5) {
+          status = 'warning';
+        }
+
+        segData.push({
+          segmentIndex: i,
+          startProgress,
+          endProgress,
+          startHeight: startPosBall.y,
+          endHeight: endPosBall.y,
+          startDistance: 0,
+          endDistance: 0,
+          status,
+          minClearance,
+        });
+
+        const segColor = SEGMENT_STATUS_COLOR[status];
+        const segPoints = [
+          new THREE.Vector3(startPosBall.x, startPosBall.y, startPosBall.z),
+          new THREE.Vector3(endPosBall.x, endPosBall.y, endPosBall.z),
+        ];
+        const segGeo = new THREE.BufferGeometry().setFromPoints(segPoints);
+        const segMat = new THREE.LineBasicMaterial({
+          color: segColor,
+          linewidth: status !== 'safe' ? 5 : 2.5,
+          transparent: true,
+          opacity: status !== 'safe' ? 1 : 0.65,
+        });
+        const segLine = new THREE.Line(segGeo, segMat);
+        scene.add(segLine);
+        objectsRef.current.pathSegments.push(segLine);
+
+        if (status !== 'safe') {
+          const midV = new THREE.Vector3(
+            (startPosBall.x + endPosBall.x) / 2,
+            (startPosBall.y + endPosBall.y) / 2,
+            (startPosBall.z + endPosBall.z) / 2
+          );
+          const hlGeo = new THREE.SphereGeometry(0.28, 16, 16);
+          const hlMat = new THREE.MeshBasicMaterial({
+            color: segColor,
+            transparent: true,
+            opacity: 0.55,
+          });
+          const hl = new THREE.Mesh(hlGeo, hlMat);
+          hl.position.copy(midV);
+          hl.userData = { segmentIndex: i };
+          scene.add(hl);
+          objectsRef.current.pathSegmentHighlights.push(hl);
+        }
+      }
+      objectsRef.current.pathSegmentData = segData;
+
       const pathPoints: THREE.Vector3[] = [];
       for (let i = 0; i <= 60; i++) {
         const t = i / 60;
@@ -421,10 +583,12 @@ export default function Scene3D() {
       }
       const pathGeo = new THREE.BufferGeometry().setFromPoints(pathPoints);
       const pathMat = new THREE.LineDashedMaterial({
-        color: pathColor,
+        color: hasCollision ? 0xef4444 : 0x22c55e,
         dashSize: 0.3,
         gapSize: 0.2,
         linewidth: 2,
+        transparent: true,
+        opacity: 0.35,
       });
       const pLine = new THREE.Line(pathGeo, pathMat);
       pLine.computeLineDistances();
@@ -448,6 +612,33 @@ export default function Scene3D() {
         mat.opacity = 0.55;
       });
     }
+  }
+
+  function updateSegmentHighlight() {
+    const { pathSegments, pathSegmentHighlights } = objectsRef.current;
+    pathSegments.forEach((seg, idx) => {
+      const mat = seg.material as THREE.LineBasicMaterial;
+      const isSelected = idx === selectedSegmentIndex;
+      if (isSelected) {
+        mat.linewidth = 7;
+        mat.opacity = 1;
+      } else {
+        const segData = objectsRef.current.pathSegmentData[idx];
+        if (segData && segData.status === 'safe') {
+          mat.linewidth = 2.5;
+          mat.opacity = 0.65;
+        } else if (segData) {
+          mat.linewidth = 5;
+          mat.opacity = 1;
+        }
+      }
+    });
+    pathSegmentHighlights.forEach((hl) => {
+      const mat = hl.material as THREE.MeshBasicMaterial;
+      const isSelected = (hl.userData as { segmentIndex: number }).segmentIndex === selectedSegmentIndex;
+      hl.scale.setScalar(isSelected ? 2.2 : 1);
+      mat.opacity = isSelected ? 0.9 : 0.55;
+    });
   }
 
   function animateSoilBall() {

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import type { TreeData, LiftCombination } from '@/types';
+import type { TreeData, LiftCombination, ProfileData } from '@/types';
 import { mockTrees } from '@/data/mockTrees';
-import { computeAllCombinations } from '@/utils/liftingMath';
+import { computeAllCombinations, computeProfileData, getLiftPointById } from '@/utils/liftingMath';
 
 interface AppState {
   trees: TreeData[];
@@ -12,6 +12,8 @@ interface AppState {
   isAnimating: boolean;
   combinations: LiftCombination[];
   canvasRef: HTMLCanvasElement | null;
+  profileData: ProfileData | null;
+  selectedSegmentIndex: number | null;
 
   setCurrentTree: (id: string) => void;
   toggleLiftPoint: (id: string) => void;
@@ -20,6 +22,8 @@ interface AppState {
   setIsAnimating: (a: boolean) => void;
   setCanvasRef: (c: HTMLCanvasElement | null) => void;
   recomputeCombinations: () => void;
+  recomputeProfile: () => void;
+  setSelectedSegmentIndex: (idx: number | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -31,6 +35,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   isAnimating: false,
   combinations: computeAllCombinations(mockTrees[0], 0),
   canvasRef: null,
+  profileData: null,
+  selectedSegmentIndex: null,
 
   setCurrentTree: (id) => {
     const tree = get().trees.find(t => t.id === id);
@@ -41,6 +47,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         animationProgress: 0,
         isAnimating: false,
         combinations: computeAllCombinations(tree, get().swingCm),
+        profileData: null,
+        selectedSegmentIndex: null,
       });
     }
   },
@@ -55,12 +63,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     } else {
       next = [...selectedLiftPoints, id];
     }
-    set({ selectedLiftPoints: next, animationProgress: 0, isAnimating: false });
+    set({
+      selectedLiftPoints: next,
+      animationProgress: 0,
+      isAnimating: false,
+      selectedSegmentIndex: null,
+    });
+    get().recomputeProfile();
   },
 
   setSwingCm: (cm) => {
     set({ swingCm: cm });
     get().recomputeCombinations();
+    get().recomputeProfile();
   },
 
   setAnimationProgress: (p) => set({ animationProgress: p }),
@@ -74,6 +89,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ combinations: computeAllCombinations(tree, swingCm) });
     }
   },
+
+  recomputeProfile: () => {
+    const { currentTreeId, trees, swingCm, selectedLiftPoints } = get();
+    const tree = trees.find(t => t.id === currentTreeId);
+    if (!tree || selectedLiftPoints.length !== 2) {
+      set({ profileData: null, selectedSegmentIndex: null });
+      return;
+    }
+    const lpA = getLiftPointById(tree, selectedLiftPoints[0]);
+    const lpB = getLiftPointById(tree, selectedLiftPoints[1]);
+    if (!lpA || !lpB) {
+      set({ profileData: null });
+      return;
+    }
+    const profile = computeProfileData(tree, lpA.position, lpB.position, swingCm);
+    set({ profileData: profile });
+  },
+
+  setSelectedSegmentIndex: (idx) => set({ selectedSegmentIndex: idx }),
 }));
 
 export function getCurrentTree(): TreeData | undefined {

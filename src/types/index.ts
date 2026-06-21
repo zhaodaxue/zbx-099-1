@@ -52,3 +52,37 @@ export interface HeightPoint {
   progress: number;
   height: number;
 }
+
+export type SegmentStatus = 'safe' | 'warning' | 'collision';
+
+export interface PathSegment {
+  segmentIndex: number;
+  startProgress: number;
+  endProgress: number;
+  startHeight: number;
+  endHeight: number;
+  startDistance: number;
+  endDistance: number;
+  status: SegmentStatus;
+  minClearance: number;
+}
+
+export interface ObstacleProjection {
+  obstacleId: string;
+  obstacleName: string;
+  startDistance: number;
+  endDistance: number;
+  topHeight: number;
+  bottomHeight: number;
+  status: SegmentStatus;
+}
+
+export interface ProfileData {
+  totalDistance: number;
+  maxHeight: number;
+  segments: PathSegment[];
+  obstacleProjections: ObstacleProjection[];
+  startPos: Vec3;
+  targetPos: Vec3;
+  ballRadius: number;
+}
