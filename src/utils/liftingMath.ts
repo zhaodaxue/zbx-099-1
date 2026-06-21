@@ -153,19 +153,16 @@ export function computeLiftHeight(
   ballStart: Vec3,
   ballTarget: Vec3,
   obstacles: Obstacle[],
-  ballRadius: number
+  ballRadius: number,
+  liftPointA?: Vec3,
+  liftPointB?: Vec3
 ): number {
-  let maxObstacleY = 0;
-  for (const obs of obstacles) {
-    const topY = obs.position.y + obs.size.y / 2;
-    const startDist = Math.hypot(ballStart.x - obs.position.x, ballStart.z - obs.position.z);
-    const targetDist = Math.hypot(ballTarget.x - obs.position.x, ballTarget.z - obs.position.z);
-    const obsHalf = Math.hypot(obs.size.x, obs.size.z) / 2;
-    if (startDist < obsHalf + ballRadius + 2 || targetDist < obsHalf + ballRadius + 2) {
-      maxObstacleY = Math.max(maxObstacleY, topY);
-    }
+  if (liftPointA && liftPointB) {
+    const minLiftY = Math.min(liftPointA.y, liftPointB.y);
+    const safeHeight = minLiftY - ballRadius - 1.5;
+    return Math.max(safeHeight - ballStart.y, 2);
   }
-  return Math.max(maxObstacleY - ballStart.y + ballRadius + 1, 3);
+  return 3;
 }
 
 export function computeCableTonnage(
@@ -221,19 +218,21 @@ export function computeAllCombinations(
   const ballRadius = soilBall.diameter / 2;
   const startPos = soilBall.centerOfMass;
   const targetPos = { x: targetPit.position.x, y: targetPit.depth + ballRadius, z: targetPit.position.z };
-  const liftHeight = computeLiftHeight(startPos, targetPos, obstacles, ballRadius);
 
   for (let i = 0; i < liftPoints.length; i++) {
     for (let j = i + 1; j < liftPoints.length; j++) {
       const lpA = liftPoints[i];
       const lpB = liftPoints[j];
 
+      const comboLiftHeight = computeLiftHeight(
+        startPos, targetPos, obstacles, ballRadius, lpA.position, lpB.position
+      );
       let peakTonnage = 0;
       const segments = 40;
 
       for (let k = 0; k <= segments; k++) {
         const t = k / segments;
-        const ballPos = computeBallPosition(startPos, targetPos, t, liftHeight);
+        const ballPos = computeBallPosition(startPos, targetPos, t, comboLiftHeight);
         const { tonnageA, tonnageB } = computeCableTonnage(soilBall.weight, lpA.position, lpB.position, ballPos);
         peakTonnage = Math.max(peakTonnage, tonnageA, tonnageB);
       }
@@ -244,7 +243,7 @@ export function computeAllCombinations(
         startPos,
         targetPos,
         ballRadius,
-        liftHeight,
+        comboLiftHeight,
         obstacles,
         swingOffset
       );
@@ -252,7 +251,7 @@ export function computeAllCombinations(
       const minRated = Math.min(lpA.ratedTonnage, lpB.ratedTonnage);
       const tonnageInsufficient = peakTonnage > minRated;
 
-      const heightCurve = computeHeightCurve(startPos, targetPos, liftHeight).map(p => p.height);
+      const heightCurve = computeHeightCurve(startPos, targetPos, comboLiftHeight).map(p => p.height);
 
       results.push({
         pointA: lpA.id,

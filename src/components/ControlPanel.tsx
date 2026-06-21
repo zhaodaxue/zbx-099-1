@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import html2canvas from 'html2canvas';
 import { TreeDeciduous, Wind, Download, Play, AlertTriangle, CheckCircle, XCircle, Gauge } from 'lucide-react';
 import { useAppStore, getCurrentTree } from '@/store/useAppStore';
 import { getLiftPointById } from '@/utils/liftingMath';
@@ -28,17 +27,13 @@ export default function ControlPanel() {
     );
   }, [combinations, selectedLiftPoints, currentTree]);
 
-  const handleExportPNG = async () => {
+  const handleExportPNG = () => {
     if (!canvasRef) return;
     try {
-      const canvas = await html2canvas(canvasRef, {
-        backgroundColor: '#0f1419',
-        scale: 2,
-        useCORS: true,
-      });
+      const dataUrl = canvasRef.toDataURL('image/png', 1.0);
       const link = document.createElement('a');
       link.download = `吊装方案_${currentTree?.name ?? '方案'}_${new Date().toISOString().slice(0, 10)}.png`;
-      link.href = canvas.toDataURL('image/png');
+      link.href = dataUrl;
       link.click();
     } catch (err) {
       console.error('导出失败:', err);

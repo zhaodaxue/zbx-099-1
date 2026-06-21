@@ -24,10 +24,12 @@ export default function Scene3D() {
     obstacles: THREE.Mesh[];
     liftPoints: THREE.Group[];
     targetPit?: THREE.Mesh;
+    targetPitRing?: THREE.Mesh;
     pathLine?: THREE.Line;
     cables: THREE.Line[];
     pathHasCollision: boolean;
-  }>({ obstacles: [], liftPoints: [], cables: [], pathHasCollision: false });
+    currentLiftHeight: number;
+  }>({ obstacles: [], liftPoints: [], cables: [], pathHasCollision: false, currentLiftHeight: 3 });
   const rafRef = useRef<number>(0);
 
   const selectedLiftPoints = useAppStore(s => s.selectedLiftPoints);
@@ -180,8 +182,8 @@ export default function Scene3D() {
   function clearDynamicObjects() {
     const scene = sceneRef.current;
     if (!scene) return;
-    const { soilBall, treeTrunk, obstacles, liftPoints, targetPit, pathLine, cables } = objectsRef.current;
-    [soilBall, treeTrunk, targetPit, pathLine].forEach(obj => {
+    const { soilBall, treeTrunk, obstacles, liftPoints, targetPit, targetPitRing, pathLine, cables } = objectsRef.current;
+    [soilBall, treeTrunk, targetPit, targetPitRing, pathLine].forEach(obj => {
       if (obj) {
         scene.remove(obj);
         disposeObject(obj);
@@ -190,7 +192,7 @@ export default function Scene3D() {
     obstacles.forEach(o => { scene.remove(o); disposeObject(o); });
     liftPoints.forEach(l => { scene.remove(l); disposeObject(l); });
     cables.forEach(c => { scene.remove(c); disposeObject(c); });
-    objectsRef.current = { obstacles: [], liftPoints: [], cables: [], pathHasCollision: false };
+    objectsRef.current = { obstacles: [], liftPoints: [], cables: [], pathHasCollision: false, currentLiftHeight: 3 };
   }
 
   function disposeObject(obj: THREE.Object3D) {
@@ -349,6 +351,7 @@ export default function Scene3D() {
     );
     scene.add(ring);
     objectsRef.current.targetPit = pit;
+    objectsRef.current.targetPitRing = ring;
   }
 
   function updateDynamicElements() {
@@ -397,7 +400,10 @@ export default function Scene3D() {
         y: tree.targetPit.depth + ballRadius,
         z: tree.targetPit.position.z,
       };
-      const liftHeight = computeLiftHeight(startPos, targetPos, tree.obstacles, ballRadius);
+      const liftHeight = computeLiftHeight(
+        startPos, targetPos, tree.obstacles, ballRadius, lpA.position, lpB.position
+      );
+      objectsRef.current.currentLiftHeight = liftHeight;
 
       const swingRad = swingCm / 100;
       const swingOffset: Vec3 = { x: swingRad, y: 0, z: swingRad };
@@ -459,7 +465,7 @@ export default function Scene3D() {
       y: tree.targetPit.depth + ballRadius,
       z: tree.targetPit.position.z,
     };
-    const liftHeight = computeLiftHeight(startPos, targetPos, tree.obstacles, ballRadius);
+    const liftHeight = objectsRef.current.currentLiftHeight;
 
     const swingRad = swingCm / 100;
     const swingOffset: Vec3 = { x: swingRad, y: 0, z: swingRad };

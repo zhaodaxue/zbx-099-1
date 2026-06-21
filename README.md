@@ -151,7 +151,7 @@ docker run -d -p 8080:80 --name tree-lifting tree-lifting-review
 - **3D 渲染**：three.js（原生 WebGL，OrbitControls）
 - **状态管理**：Zustand
 - **样式**：Tailwind CSS 3 + lucide-react 图标
-- **导出**：html2canvas（PNG 截图）
+- **导出**：Three.js WebGL canvas 原生 toDataURL（PNG 截图）
 - **部署**：Nginx 1.27 + Docker 多阶段构建
 
 ## 计算说明（简化模型）
